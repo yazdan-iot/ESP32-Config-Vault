@@ -1,17 +1,17 @@
 /**
  * ESP32-Config-Vault
  *
- * سیستم مدیریت تنظیمات دائمی با NVS
- * ویژگی‌ها:
- *   - ذخیره‌ی تنظیمات WiFi، MQTT، و کاربر در NVS
- *   - Provisioning Flow: اگه پیکربندی نشده → AP Mode
- *   - Runtime Config Update از طریق Serial Commands
- *   - Factory Reset با Long Press روی BOOT
- *   - Boot Analysis: شمارش ری‌استارت و Crash
- *   - Thread-Safe NVS با Mutex (آماده برای FreeRTOS)
- *   - آمار و Health Check حافظه
+ * Persistent settings management system with NVS
+ * Features:
+ *   - Store WiFi, MQTT, and user settings in NVS
+ *   - Provisioning Flow: if not configured → AP Mode
+ *   - Runtime Config Update via Serial Commands
+ *   - Factory Reset via Long Press on BOOT
+ *   - Boot Analysis: restart and crash counting
+ *   - Thread-Safe NVS with Mutex (ready for FreeRTOS)
+ *   - Memory stats and Health Check
  *
- * سخت‌افزار: فقط ESP32 (بدون هیچ قطعه‌ی خارجی)
+ * Hardware: ESP32 only (no external components)
  */
 
 #include <Arduino.h>
@@ -19,9 +19,9 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
-// ==================== تعریف‌های ثابت ====================
-// ⚠️ همیشه از #define برای کلیدهای NVS استفاده کن
-// تا از خطای بیش از ۱۵ کاراکتر جلوگیری بشه
+// ==================== Constant Definitions ====================
+// ⚠️ Always use #define for NVS keys
+// to avoid the "more than 15 characters" error
 
 // Namespaces (max 15 chars)
 #define NS_PROVISION  "prov"
@@ -52,7 +52,7 @@
 #define LED_PIN         2
 #define LONG_PRESS_MS   3000
 
-// ==================== ساختارهای داده ====================
+// ==================== Data Structures ====================
 
 struct ProvisionConfig {
     char wifiSSID[32]   = "";
@@ -76,7 +76,7 @@ struct SystemLog {
     uint8_t  lastReset  = 0;  // esp_reset_reason_t
 };
 
-// ==================== متغیرهای سراسری ====================
+// ==================== Global Variables ====================
 ProvisionConfig gProvConfig;
 UserConfig      gUserConfig;
 SystemLog       gSysLog;
@@ -124,7 +124,7 @@ public:
             p.end();
             _giveMutex();
 
-            if (ok) loadProvision(); // بارگذاری دوباره در RAM
+            if (ok) loadProvision(); // reload into RAM
         }
         return ok;
     }
@@ -170,7 +170,7 @@ public:
             gSysLog.crashCount = p.getUInt(KEY_CRASH_COUNT, 0);
             gSysLog.lastReset  = (uint8_t)esp_reset_reason();
 
-            // اگه علت ری‌استارت crash بود، counter رو بالا ببر
+            // If the restart reason was a crash, increment the counter
             if (gSysLog.lastReset == ESP_RST_PANIC ||
                 gSysLog.lastReset == ESP_RST_WDT) {
                 gSysLog.crashCount++;
@@ -192,7 +192,7 @@ public:
 
             p.begin(NS_PROVISION, false); p.clear(); p.end();
             p.begin(NS_USER_CFG,  false); p.clear(); p.end();
-            // SysLog رو نگه می‌داریم (بوت‌شمار و کرش‌شمار)
+            // Keep SysLog (boot count and crash count)
 
             _giveMutex();
         }
@@ -237,7 +237,7 @@ public:
 
 private:
     static bool _takeMutex() {
-        if (nvsMutex == nullptr) return true; // قبل از init FreeRTOS
+        if (nvsMutex == nullptr) return true; // before FreeRTOS init
         return xSemaphoreTake(nvsMutex, pdMS_TO_TICKS(2000)) == pdTRUE;
     }
     static void _giveMutex() {
@@ -313,7 +313,7 @@ void handleSerialCommands() {
         ConfigManager::factoryReset();
     }
     else if (cmd == "setprov") {
-        // برای تست — شبیه‌سازی provisioning
+        // for testing — simulate provisioning
         ConfigManager::saveProvision("TestWiFi", "TestPassword", "broker.hivemq.com", 1883);
         Serial.println("Dummy provision data saved!");
     }
@@ -331,12 +331,12 @@ void handleButton() {
     bool isPressed = (digitalRead(BUTTON_PIN) == LOW);
     
     if (isPressed && !buttonPressed) {
-        // شروع فشار
+        // press started
         buttonPressed = true;
         buttonPressStart = millis();
     }
     else if (!isPressed && buttonPressed) {
-        // رها شد
+        // released
         uint32_t held = millis() - buttonPressStart;
         buttonPressed = false;
         
@@ -352,10 +352,10 @@ void handleButton() {
         }
     }
     else if (isPressed && buttonPressed) {
-        // در حال نگه داشتن
+        // still being held
         uint32_t held = millis() - buttonPressStart;
         if (held > LONG_PRESS_MS / 2) {
-            // چشمک LED هشدار
+            // blink warning LED
             digitalWrite(LED_PIN, (millis() / 200) % 2);
         }
     }
@@ -369,14 +369,14 @@ unsigned long lastReportTime = 0;
 void runMainApp() {
     uint32_t now = millis();
     
-    // شبیه‌سازی خواندن سنسور
+    // simulate sensor reading
     if (now - lastSensorTime >= gUserConfig.sensorInt) {
         lastSensorTime = now;
         float fakeTemp = 20.0f + (random(0, 100) / 10.0f);
         Serial.printf("[SENSOR] Temp: %.1f°C\n", fakeTemp);
     }
     
-    // گزارش هر ۳۰ ثانیه
+    // report every 30 seconds
     if (now - lastReportTime >= 30000) {
         lastReportTime = now;
         ConfigManager::printHealthReport();
@@ -396,13 +396,13 @@ void setup() {
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
     
-    // مقداردهی ConfigManager
+    // initialize ConfigManager
     ConfigManager::init();
     
-    // بارگذاری لاگ سیستم + شمارش boot
+    // load system log + increment boot count
     ConfigManager::loadAndUpdateSysLog();
     
-    // نمایش علت ری‌استارت
+    // show reset reason
     const char* resetReasons[] = {
         "Unknown", "Power on", "External pin", "Software",
         "Exception/Panic", "Interrupt WDT", "Task WDT", "WDT",
@@ -413,7 +413,7 @@ void setup() {
                   gSysLog.bootCount,
                   reason < 11 ? resetReasons[reason] : "Other");
     
-    // بارگذاری تنظیمات
+    // load settings
     bool provisioned = ConfigManager::loadProvision();
     ConfigManager::loadUserConfig();
     
